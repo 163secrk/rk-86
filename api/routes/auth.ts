@@ -39,8 +39,8 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
 
     if (userRole === 'worker') {
       await db.run(
-        'INSERT INTO workers (user_id, skills, experience) VALUES (?, ?, ?)',
-        [result.lastID, '', 0]
+        'INSERT INTO workers (user_id, name, phone, skills) VALUES (?, ?, ?, ?)',
+        [result.lastID, name, phone || '', '']
       )
     }
 

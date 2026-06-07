@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-screen bg-gray-50">
-    <header class="bg-white shadow-sm sticky top-0 z-50">
+  <div class="min-h-screen bg-gray-50 flex flex-col">
+    <header class="bg-white shadow-sm sticky top-0 z-50 flex-shrink-0">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between items-center h-16">
           <div class="flex items-center space-x-3 cursor-pointer" @click="goHome">
@@ -83,10 +83,10 @@
         </div>
       </div>
     </header>
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
       <router-view />
     </main>
-    <footer class="bg-gray-800 text-gray-300 py-8 mt-12">
+    <footer class="bg-gray-800 text-gray-300 py-8 mt-auto flex-shrink-0">
       <div class="max-w-7xl mx-auto px-4 text-center">
         <p class="text-sm">© 2024 家政服务平台 - 专业、便捷、放心</p>
       </div>

@@ -16,7 +16,7 @@ async function loadServices() {
     loading.value = true
     const res = await serviceApi.list()
     if (res.success && res.data) {
-      services.value = res.data.filter(s => s.status === 1)
+      services.value = res.data.filter(s => s.status === 'active')
     }
   } catch (e) {
     console.error('Failed to load services:', e)

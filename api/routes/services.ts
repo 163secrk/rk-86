@@ -12,7 +12,10 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
     res.json({
       success: true,
-      data: services,
+      data: services.map(s => ({
+        ...s,
+        unit: s.unit || '次',
+      })),
     })
   } catch (err) {
     console.error(err)
@@ -40,7 +43,10 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     res.json({
       success: true,
-      data: service,
+      data: {
+        ...service,
+        unit: service.unit || '次',
+      },
     })
   } catch (err) {
     console.error(err)
@@ -53,7 +59,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { name, description, price, unit, duration, image, status } = req.body
+    const { name, description, price, category, duration, image, status } = req.body
 
     if (!name || price === undefined || price === null) {
       res.status(400).json({
@@ -65,8 +71,8 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 
     const db = await getDb()
     const result = await db.run(
-      'INSERT INTO services (name, description, price, unit, duration, image, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [name, description || '', price, unit || '次', duration || 60, image || '', status ?? 1]
+      'INSERT INTO services (name, description, price, category, duration, image, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, description || '', price, category || '家政服务', duration || 60, image || '', status ?? 'active']
     )
 
     const service = await db.get('SELECT * FROM services WHERE id = ?', [result.lastID])
@@ -74,7 +80,10 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 
     res.json({
       success: true,
-      data: service,
+      data: {
+        ...service,
+        unit: '次',
+      },
     })
   } catch (err) {
     console.error(err)
@@ -88,7 +97,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 router.put('/:id', authMiddleware, requireRole('admin'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params
-    const { name, description, price, unit, duration, image, status } = req.body
+    const { name, description, price, category, duration, image, status } = req.body
 
     const db = await getDb()
     const existing = await db.get('SELECT * FROM services WHERE id = ?', [id])
@@ -103,12 +112,12 @@ router.put('/:id', authMiddleware, requireRole('admin'), async (req: AuthRequest
     }
 
     await db.run(
-      'UPDATE services SET name = ?, description = ?, price = ?, unit = ?, duration = ?, image = ?, status = ? WHERE id = ?',
+      'UPDATE services SET name = ?, description = ?, price = ?, category = ?, duration = ?, image = ?, status = ? WHERE id = ?',
       [
         name !== undefined ? name : existing.name,
         description !== undefined ? description : existing.description,
         price !== undefined ? price : existing.price,
-        unit !== undefined ? unit : existing.unit,
+        category !== undefined ? category : existing.category,
         duration !== undefined ? duration : existing.duration,
         image !== undefined ? image : existing.image,
         status !== undefined ? status : existing.status,
@@ -121,7 +130,10 @@ router.put('/:id', authMiddleware, requireRole('admin'), async (req: AuthRequest
 
     res.json({
       success: true,
-      data: service,
+      data: {
+        ...service,
+        unit: service.unit || '次',
+      },
     })
   } catch (err) {
     console.error(err)

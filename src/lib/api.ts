@@ -13,8 +13,9 @@ export interface Service {
   price: number
   unit: string
   duration: number
+  category: string
   image: string
-  status: number
+  status: string
   created_at: string
 }
 
@@ -27,7 +28,8 @@ export interface Worker {
   experience: number
   rating: number
   order_count: number
-  status: number
+  status: string
+  avatar?: string
   created_at: string
 }
 

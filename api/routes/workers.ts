@@ -8,10 +8,8 @@ router.get('/', async (req, res: Response): Promise<void> => {
   try {
     const db = await getDb()
     const workers = await db.all(`
-      SELECT w.id, w.user_id, w.skills, w.experience, w.rating, w.order_count, w.status,
-             u.name, u.phone
+      SELECT w.id, w.user_id, w.name, w.phone, w.skills, w.rating, w.order_count, w.status, w.avatar
       FROM workers w
-      INNER JOIN users u ON w.user_id = u.id
       ORDER BY w.id DESC
     `)
     await db.close()
@@ -20,7 +18,8 @@ router.get('/', async (req, res: Response): Promise<void> => {
       success: true,
       data: workers.map(w => ({
         ...w,
-        skills: w.skills ? JSON.parse(w.skills) : [],
+        skills: w.skills ? w.skills.split(',').filter(Boolean) : [],
+        experience: 0,
       })),
     })
   } catch (err) {
@@ -37,10 +36,8 @@ router.get('/:id', async (req, res: Response): Promise<void> => {
     const { id } = req.params
     const db = await getDb()
     const worker = await db.get(`
-      SELECT w.id, w.user_id, w.skills, w.experience, w.rating, w.order_count, w.status,
-             u.name, u.phone
+      SELECT w.id, w.user_id, w.name, w.phone, w.skills, w.rating, w.order_count, w.status, w.avatar
       FROM workers w
-      INNER JOIN users u ON w.user_id = u.id
       WHERE w.id = ?
     `, [id])
     await db.close()
@@ -57,7 +54,8 @@ router.get('/:id', async (req, res: Response): Promise<void> => {
       success: true,
       data: {
         ...worker,
-        skills: worker.skills ? JSON.parse(worker.skills) : [],
+        skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
+        experience: 0,
       },
     })
   } catch (err) {
@@ -71,7 +69,7 @@ router.get('/:id', async (req, res: Response): Promise<void> => {
 
 router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { user_id, skills, experience } = req.body
+    const { user_id, skills } = req.body
 
     if (!user_id) {
       res.status(400).json({
@@ -83,7 +81,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 
     const db = await getDb()
 
-    const existingUser = await db.get('SELECT id, role FROM users WHERE id = ?', [user_id])
+    const existingUser = await db.get('SELECT id, name, phone FROM users WHERE id = ?', [user_id])
     if (!existingUser) {
       await db.close()
       res.status(400).json({
@@ -104,15 +102,13 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
     }
 
     const result = await db.run(
-      'INSERT INTO workers (user_id, skills, experience) VALUES (?, ?, ?)',
-      [user_id, JSON.stringify(skills || []), experience || 0]
+      'INSERT INTO workers (user_id, name, phone, skills) VALUES (?, ?, ?, ?)',
+      [user_id, existingUser.name, existingUser.phone || '', Array.isArray(skills) ? skills.join(',') : '']
     )
 
     const worker = await db.get(`
-      SELECT w.id, w.user_id, w.skills, w.experience, w.rating, w.order_count, w.status,
-             u.name, u.phone
+      SELECT w.id, w.user_id, w.name, w.phone, w.skills, w.rating, w.order_count, w.status, w.avatar
       FROM workers w
-      INNER JOIN users u ON w.user_id = u.id
       WHERE w.id = ?
     `, [result.lastID])
     await db.close()
@@ -121,7 +117,8 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
       success: true,
       data: {
         ...worker,
-        skills: worker.skills ? JSON.parse(worker.skills) : [],
+        skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
+        experience: 0,
       },
     })
   } catch (err) {
@@ -136,7 +133,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params
-    const { skills, experience, status } = req.body
+    const { skills, status } = req.body
 
     const db = await getDb()
     const worker = await db.get('SELECT user_id FROM workers WHERE id = ?', [id])
@@ -167,11 +164,7 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
 
     if (skills !== undefined) {
       updates.push('skills = ?')
-      values.push(JSON.stringify(skills))
-    }
-    if (experience !== undefined) {
-      updates.push('experience = ?')
-      values.push(experience)
+      values.push(Array.isArray(skills) ? skills.join(',') : skills || '')
     }
     if (status !== undefined) {
       if (!isAdmin) {
@@ -203,10 +196,8 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
     )
 
     const updatedWorker = await db.get(`
-      SELECT w.id, w.user_id, w.skills, w.experience, w.rating, w.order_count, w.status,
-             u.name, u.phone
+      SELECT w.id, w.user_id, w.name, w.phone, w.skills, w.rating, w.order_count, w.status, w.avatar
       FROM workers w
-      INNER JOIN users u ON w.user_id = u.id
       WHERE w.id = ?
     `, [id])
     await db.close()
@@ -215,7 +206,8 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
       success: true,
       data: {
         ...updatedWorker,
-        skills: updatedWorker.skills ? JSON.parse(updatedWorker.skills) : [],
+        skills: updatedWorker.skills ? updatedWorker.skills.split(',').filter(Boolean) : [],
+        experience: 0,
       },
     })
   } catch (err) {

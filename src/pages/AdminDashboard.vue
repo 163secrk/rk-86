@@ -23,7 +23,7 @@ const filteredOrders = computed(() => {
 })
 
 const avgRating = computed(() => {
-  const activeWorkers = workers.value.filter(w => w.status === 1)
+  const activeWorkers = workers.value.filter(w => w.status === 'available')
   if (activeWorkers.length === 0) return 0
   const sum = activeWorkers.reduce((acc, w) => acc + w.rating, 0)
   return (sum / activeWorkers.length).toFixed(1)
@@ -64,7 +64,7 @@ async function openAssignDialog(orderId: number) {
   try {
     const res = await workerApi.list()
     if (res.success) {
-      availableWorkers.value = (res.data || []).filter(w => w.status === 1)
+      availableWorkers.value = (res.data || []).filter(w => w.status === 'available')
     }
   } finally {
     assignLoading.value = false
@@ -98,8 +98,8 @@ async function handleCancelOrder(orderId: number) {
 }
 
 async function toggleWorkerStatus(worker: Worker) {
-  const newStatus = worker.status === 1 ? 0 : 1
-  const action = newStatus === 1 ? '启用' : '禁用'
+  const newStatus = worker.status === 'available' ? 'disabled' : 'available'
+  const action = newStatus === 'available' ? '启用' : '禁用'
   if (!confirm(`确定要${action}该家政人员吗？`)) return
   try {
     const res = await workerApi.update(worker.id, { status: newStatus })
@@ -303,12 +303,12 @@ function formatDate(dateStr: string) {
                   <span
                     :class="[
                       'px-2 py-1 rounded-full text-xs font-medium',
-                      worker.status === 1
+                      worker.status === 'available'
                         ? 'bg-green-100 text-green-800'
                         : 'bg-gray-100 text-gray-800',
                     ]"
                   >
-                    {{ worker.status === 1 ? '启用' : '禁用' }}
+                    {{ worker.status === 'available' ? '启用' : '禁用' }}
                   </span>
                 </td>
                 <td class="px-4 py-4 text-sm">
@@ -316,12 +316,12 @@ function formatDate(dateStr: string) {
                     @click="toggleWorkerStatus(worker)"
                     :class="[
                       'font-medium',
-                      worker.status === 1
+                      worker.status === 'available'
                         ? 'text-red-600 hover:text-red-800'
                         : 'text-green-600 hover:text-green-800',
                     ]"
                   >
-                    {{ worker.status === 1 ? '禁用' : '启用' }}
+                    {{ worker.status === 'available' ? '禁用' : '启用' }}
                   </button>
                 </td>
               </tr>
