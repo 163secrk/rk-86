@@ -44,6 +44,13 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       )
     }
 
+    if (userRole === 'customer') {
+      await db.run(
+        'INSERT INTO members (user_id, level, points, total_spent, total_orders, discount) VALUES (?, ?, ?, ?, ?, ?)',
+        [result.lastID, '普通', 0, 0, 0, 1.0]
+      )
+    }
+
     const user = await db.get(
       'SELECT id, username, name, phone, role FROM users WHERE id = ?',
       [result.lastID]

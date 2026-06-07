@@ -66,6 +66,53 @@ export interface Review {
   service_name?: string
 }
 
+export interface MemberLevel {
+  level: string
+  minSpent: number
+  maxSpent: number
+  discount: number
+  pointsRate: number
+}
+
+export interface Member {
+  id: number
+  user_id: number
+  level: string
+  points: number
+  total_spent: number
+  total_orders: number
+  discount: number
+  created_at: string
+  updated_at: string
+  currentLevelConfig?: MemberLevel
+  nextLevel?: MemberLevel | null
+  progress?: number
+}
+
+export interface PointsRecord {
+  id: number
+  member_id: number
+  user_id: number
+  type: 'earn' | 'spend'
+  points: number
+  balance: number
+  order_id?: number
+  description?: string
+  created_at: string
+  order_no?: string
+  service_name?: string
+}
+
+export interface PointsDeductionResult {
+  points_available: number
+  points_requested: number
+  points_used: number
+  deduction_amount: number
+  max_deduction: number
+  member_level: string
+  member_discount: number
+}
+
 const baseURL = '/api'
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<{ success: boolean; data?: T; error?: string }> {
@@ -144,4 +191,19 @@ export const reviewApi = {
     request<Review>('/reviews', { method: 'POST', body: JSON.stringify(data) }),
   getByWorker: (workerId: number) =>
     request<{ reviews: Review[]; avg_rating: number; review_count: number }>(`/reviews/worker/${workerId}`),
+}
+
+export const memberApi = {
+  profile: () => request<Member>('/members/profile'),
+  points: (params?: { page?: number; pageSize?: number }) => {
+    const q = params ? '?' + new URLSearchParams(params as any).toString() : ''
+    return request<{ records: PointsRecord[]; total: number; page: number; pageSize: number }>(`/members/points${q}`)
+  },
+  orders: (params?: { page?: number; pageSize?: number }) => {
+    const q = params ? '?' + new URLSearchParams(params as any).toString() : ''
+    return request<{ orders: Order[]; total: number; total_spent: number; page: number; pageSize: number }>(`/members/orders${q}`)
+  },
+  calculateDeduction: (data: { points: number; order_amount: number }) =>
+    request<PointsDeductionResult>('/members/calculate-deduction', { method: 'POST', body: JSON.stringify(data) }),
+  levels: () => request<MemberLevel[]>('/members/levels'),
 }

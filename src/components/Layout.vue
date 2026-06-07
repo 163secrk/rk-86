@@ -14,6 +14,7 @@
             <template v-if="isLoggedIn">
               <template v-if="isCustomer">
                 <router-link to="/orders" class="text-gray-600 hover:text-blue-600 transition-colors">我的订单</router-link>
+                <router-link to="/member" class="text-gray-600 hover:text-blue-600 transition-colors">会员中心</router-link>
               </template>
               <template v-else-if="isWorker">
                 <router-link to="/worker/orders" class="text-gray-600 hover:text-blue-600 transition-colors">我的工单</router-link>
@@ -67,6 +68,9 @@
             <template v-if="isCustomer">
               <router-link to="/orders" class="flex flex-col items-center py-1 text-gray-600 hover:text-blue-600">
                 <span class="text-sm">订单</span>
+              </router-link>
+              <router-link to="/member" class="flex flex-col items-center py-1 text-gray-600 hover:text-blue-600">
+                <span class="text-sm">会员</span>
               </router-link>
             </template>
             <template v-else-if="isWorker">

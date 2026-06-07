@@ -95,6 +95,38 @@ export async function initDb() {
     )
   `)
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER UNIQUE NOT NULL,
+      level TEXT NOT NULL DEFAULT '普通',
+      points INTEGER NOT NULL DEFAULT 0,
+      total_spent REAL NOT NULL DEFAULT 0,
+      total_orders INTEGER NOT NULL DEFAULT 0,
+      discount REAL NOT NULL DEFAULT 1.0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `)
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS points_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      points INTEGER NOT NULL,
+      balance INTEGER NOT NULL,
+      order_id INTEGER,
+      description TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (order_id) REFERENCES orders(id)
+    )
+  `)
+
   const adminCount = await db.get('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin'])
   if (adminCount.count === 0) {
     const bcrypt = await import('bcryptjs')
@@ -125,4 +157,32 @@ export async function initDb() {
 
   await db.close()
   console.log('Database initialized successfully')
+}
+
+export const MEMBER_LEVELS = [
+  { level: '普通', minSpent: 0, maxSpent: 1000, discount: 1.0, pointsRate: 1 },
+  { level: '银卡', minSpent: 1000, maxSpent: 5000, discount: 0.95, pointsRate: 1.2 },
+  { level: '金卡', minSpent: 5000, maxSpent: 20000, discount: 0.9, pointsRate: 1.5 },
+  { level: '钻石', minSpent: 20000, maxSpent: Infinity, discount: 0.85, pointsRate: 2 },
+]
+
+export const POINTS_PER_YUAN = 1
+export const POINTS_DEDUCTION_RATE = 100
+
+export function calculateMemberLevel(totalSpent: number) {
+  for (let i = MEMBER_LEVELS.length - 1; i >= 0; i--) {
+    if (totalSpent >= MEMBER_LEVELS[i].minSpent) {
+      return MEMBER_LEVELS[i]
+    }
+  }
+  return MEMBER_LEVELS[0]
+}
+
+export function calculatePointsEarned(amount: number, level: string) {
+  const levelConfig = MEMBER_LEVELS.find(l => l.level === level) || MEMBER_LEVELS[0]
+  return Math.floor(amount * POINTS_PER_YUAN * levelConfig.pointsRate)
+}
+
+export function calculatePointsDeduction(points: number) {
+  return Math.floor(points / POINTS_DEDUCTION_RATE)
 }

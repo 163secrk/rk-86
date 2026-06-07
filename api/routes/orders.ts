@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express'
-import { getDb } from '../db.js'
+import { getDb, calculateMemberLevel, calculatePointsEarned } from '../db.js'
 import { authMiddleware, requireRole, type AuthRequest } from '../middleware/auth.js'
 
 const router = Router()
@@ -96,7 +96,7 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
 
 router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { service_id, contact_name, contact_phone, address, appointment_time, price, remark } = req.body
+    const { service_id, contact_name, contact_phone, address, appointment_time, price, remark, use_points = 0 } = req.body
 
     if (!service_id || !contact_name || !contact_phone || !address || !appointment_time || !price) {
       res.status(400).json({
@@ -120,20 +120,75 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promis
 
     const orderNo = generateOrderNo()
     const customerId = req.user!.id
+    let finalPrice = price
+    let pointsDeduction = 0
+    let pointsUsed = 0
+
+    if (use_points && use_points > 0) {
+      const member = await db.get('SELECT * FROM members WHERE user_id = ?', [customerId])
+      if (!member) {
+        await db.close()
+        res.status(400).json({
+          success: false,
+          error: '会员信息不存在',
+        })
+        return
+      }
+
+      if (use_points > member.points) {
+        await db.close()
+        res.status(400).json({
+          success: false,
+          error: '积分余额不足',
+        })
+        return
+      }
+
+      pointsDeduction = Math.floor(use_points / 100)
+      const maxDeduction = Math.floor(price * 0.5)
+      pointsDeduction = Math.min(pointsDeduction, maxDeduction)
+      pointsUsed = pointsDeduction * 100
+
+      if (pointsUsed > 0) {
+        finalPrice = Math.max(0, price - pointsDeduction)
+        const newPoints = member.points - pointsUsed
+
+        await db.run(
+          'UPDATE members SET points = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [newPoints, member.id]
+        )
+      }
+    }
 
     const result = await db.run(
       `INSERT INTO orders 
        (order_no, customer_id, service_id, contact_name, contact_phone, address, appointment_time, price, status, remark)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      [orderNo, customerId, service_id, contact_name, contact_phone, address, appointment_time, price, remark || '']
+      [orderNo, customerId, service_id, contact_name, contact_phone, address, appointment_time, finalPrice, remark || '']
     )
+
+    if (pointsUsed > 0) {
+      const member = await db.get('SELECT id, points FROM members WHERE user_id = ?', [customerId])
+      if (member) {
+        await db.run(
+          `INSERT INTO points_records (member_id, user_id, type, points, balance, order_id, description)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [member.id, customerId, 'spend', -pointsUsed, member.points, result.lastID, `订单抵扣，使用${pointsUsed}积分，抵扣¥${pointsDeduction}`]
+        )
+      }
+    }
 
     const order = await db.get(ORDER_SELECT_SQL + ' WHERE o.id = ?', [result.lastID])
     await db.close()
 
     res.json({
       success: true,
-      data: order,
+      data: {
+        ...order,
+        original_price: price,
+        points_deduction: pointsDeduction,
+        points_used: pointsUsed,
+      },
     })
   } catch (err) {
     console.error(err)
@@ -335,6 +390,30 @@ router.put('/:id/status', authMiddleware, async (req: AuthRequest, res: Response
       `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [status, id]
     )
+
+    if (status === 'completed' && existing.status !== 'completed') {
+      const member = await db.get('SELECT * FROM members WHERE user_id = ?', [existing.customer_id])
+      if (member) {
+        const pointsEarned = calculatePointsEarned(existing.price, member.level)
+        const newTotalSpent = member.total_spent + existing.price
+        const newTotalOrders = member.total_orders + 1
+        const newLevelConfig = calculateMemberLevel(newTotalSpent)
+        const newPoints = member.points + pointsEarned
+
+        await db.run(
+          `UPDATE members SET 
+           points = ?, total_spent = ?, total_orders = ?, level = ?, discount = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [newPoints, newTotalSpent, newTotalOrders, newLevelConfig.level, newLevelConfig.discount, member.id]
+        )
+
+        await db.run(
+          `INSERT INTO points_records (member_id, user_id, type, points, balance, order_id, description)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [member.id, existing.customer_id, 'earn', pointsEarned, newPoints, existing.id, `订单完成，消费¥${existing.price}，获得${pointsEarned}积分`]
+        )
+      }
+    }
 
     const order = await db.get(ORDER_SELECT_SQL + ' WHERE o.id = ?', [id])
     await db.close()

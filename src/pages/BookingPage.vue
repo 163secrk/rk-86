@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { serviceApi, orderApi, type Service } from '@/lib/api'
+import { serviceApi, orderApi, memberApi, type Service, type Member, type PointsDeductionResult } from '@/lib/api'
 import { useAuth } from '@/composables/useAuth'
 import Empty from '@/components/Empty.vue'
+import { Crown, Coins, Info, Minus, Plus } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
 const { requireAuth, user } = useAuth()
 
 const service = ref<Service | null>(null)
+const member = ref<Member | null>(null)
 const loading = ref(true)
 const submitting = ref(false)
+const usePoints = ref(false)
+const pointsToUse = ref(0)
+const deductionResult = ref<PointsDeductionResult | null>(null)
+const calculatingDeduction = ref(false)
 
 const form = reactive({
   contact_name: '',
@@ -29,6 +35,77 @@ const errors = reactive({
 })
 
 const serviceId = computed(() => Number(route.params.serviceId))
+
+const levelColors: Record<string, { bg: string; text: string }> = {
+  '普通': { bg: 'bg-gray-100', text: 'text-gray-600' },
+  '银卡': { bg: 'bg-slate-100', text: 'text-slate-600' },
+  '金卡': { bg: 'bg-amber-100', text: 'text-amber-700' },
+  '钻石': { bg: 'bg-cyan-100', text: 'text-cyan-700' },
+}
+
+const originalPrice = computed(() => service.value?.price || 0)
+
+const discountedPrice = computed(() => {
+  if (!member.value) return originalPrice.value
+  return Math.round(originalPrice.value * member.value.discount * 100) / 100
+})
+
+const discountAmount = computed(() => {
+  return Math.round((originalPrice.value - discountedPrice.value) * 100) / 100
+})
+
+const finalPrice = computed(() => {
+  if (!usePoints.value || !deductionResult.value) return discountedPrice.value
+  return Math.max(0, Math.round((discountedPrice.value - deductionResult.value.deduction_amount) * 100) / 100)
+})
+
+const totalSavings = computed(() => {
+  return Math.round((discountAmount.value + (deductionResult.value?.deduction_amount || 0)) * 100) / 100
+})
+
+const maxPointsToUse = computed(() => {
+  if (!member.value) return 0
+  const maxByHalfPrice = Math.floor(discountedPrice.value * 0.5) * 100
+  return Math.min(member.value.points, maxByHalfPrice)
+})
+
+watch([usePoints, pointsToUse, service], async () => {
+  if (usePoints.value && pointsToUse.value > 0 && discountedPrice.value > 0) {
+    await calculateDeduction()
+  } else {
+    deductionResult.value = null
+  }
+}, { deep: true })
+
+async function calculateDeduction() {
+  if (pointsToUse.value <= 0) return
+  calculatingDeduction.value = true
+  try {
+    const res = await memberApi.calculateDeduction({
+      points: pointsToUse.value,
+      order_amount: discountedPrice.value,
+    })
+    if (res.success && res.data) {
+      deductionResult.value = res.data
+      pointsToUse.value = res.data.points_used
+    }
+  } catch (e) {
+    console.error('Failed to calculate deduction:', e)
+  } finally {
+    calculatingDeduction.value = false
+  }
+}
+
+function adjustPoints(delta: number) {
+  const newValue = pointsToUse.value + delta
+  if (newValue >= 0 && newValue <= maxPointsToUse.value) {
+    pointsToUse.value = newValue
+  }
+}
+
+function useMaxPoints() {
+  pointsToUse.value = maxPointsToUse.value
+}
 
 function validateForm(): boolean {
   let valid = true
@@ -76,13 +153,19 @@ function validateForm(): boolean {
 async function loadService() {
   try {
     loading.value = true
-    const res = await serviceApi.get(serviceId.value)
-    if (res.success && res.data) {
-      service.value = res.data
+    const [serviceRes, memberRes] = await Promise.all([
+      serviceApi.get(serviceId.value),
+      memberApi.profile().catch(() => null),
+    ])
+    if (serviceRes.success && serviceRes.data) {
+      service.value = serviceRes.data
       if (user.value) {
         form.contact_name = user.value.name
         form.contact_phone = user.value.phone || ''
       }
+    }
+    if (memberRes && memberRes.success && memberRes.data) {
+      member.value = memberRes.data
     }
   } catch (e) {
     console.error('Failed to load service:', e)
@@ -112,9 +195,10 @@ async function handleSubmit() {
       contact_phone: form.contact_phone,
       address: form.address,
       appointment_time: formatDateTimeLocal(form.appointment_time),
-      price: service.value.price,
+      price: finalPrice.value,
       remark: form.remark,
-    })
+      use_points: usePoints.value && deductionResult.value ? deductionResult.value.points_used : 0,
+    } as any)
 
     if (res.success) {
       router.push('/orders')
@@ -161,10 +245,38 @@ onMounted(() => {
           class="w-full aspect-[4/3] object-cover"
         />
         <div class="p-4">
-          <h2 class="text-xl font-semibold text-gray-800 mb-2">{{ service.name }}</h2>
+          <div class="flex items-start justify-between mb-2">
+            <h2 class="text-xl font-semibold text-gray-800">{{ service.name }}</h2>
+            <div
+              v-if="member"
+              :class="[
+                'flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium',
+                levelColors[member.level]?.bg || 'bg-gray-100',
+                levelColors[member.level]?.text || 'text-gray-600',
+              ]"
+            >
+              <Crown class="w-3 h-3" />
+              <span>{{ member.level }}会员</span>
+            </div>
+          </div>
           <div class="mb-3">
-            <span class="text-2xl font-bold text-orange-500">¥{{ service.price }}</span>
-            <span class="text-sm text-gray-500 ml-1">/{{ service.unit }}</span>
+            <div class="flex items-baseline gap-2">
+              <span v-if="member && discountAmount > 0" class="text-sm text-gray-400 line-through">
+                ¥{{ originalPrice.toFixed(2) }}
+              </span>
+              <span class="text-2xl font-bold text-orange-500">
+                ¥{{ discountedPrice.toFixed(2) }}
+              </span>
+              <span class="text-sm text-gray-500">/{{ service.unit }}</span>
+            </div>
+            <div v-if="member && discountAmount > 0" class="flex items-center gap-2 mt-1">
+              <span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">
+                {{ (member.discount * 10).toFixed(1) }}折
+              </span>
+              <span class="text-xs text-green-600">
+                已优惠 ¥{{ discountAmount.toFixed(2) }}
+              </span>
+            </div>
           </div>
           <p class="text-sm text-gray-600">{{ service.description }}</p>
         </div>
@@ -240,6 +352,92 @@ onMounted(() => {
           ></textarea>
         </div>
 
+        <div v-if="member && member.points > 0" class="mb-6 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <Coins class="w-5 h-5 text-amber-500" />
+              <span class="font-medium text-gray-800">积分抵扣</span>
+              <span class="text-sm text-gray-500">(可用 {{ member.points }} 积分)</span>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input v-model="usePoints" type="checkbox" class="sr-only peer" />
+              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-amber-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+            </label>
+          </div>
+
+          <div v-if="usePoints" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <button
+                  @click="adjustPoints(-100)"
+                  class="w-8 h-8 rounded-full bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 transition-colors"
+                >
+                  <Minus class="w-4 h-4 text-gray-600" />
+                </button>
+                <input
+                  v-model.number="pointsToUse"
+                  type="number"
+                  min="0"
+                  :max="maxPointsToUse"
+                  step="100"
+                  class="w-24 px-2 py-1.5 text-center border rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none"
+                />
+                <button
+                  @click="adjustPoints(100)"
+                  class="w-8 h-8 rounded-full bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 transition-colors"
+                >
+                  <Plus class="w-4 h-4 text-gray-600" />
+                </button>
+                <button
+                  @click="useMaxPoints"
+                  class="ml-2 text-sm text-amber-600 hover:text-amber-700 font-medium"
+                >
+                  最大
+                </button>
+              </div>
+              <div class="text-right">
+                <div v-if="deductionResult" class="text-lg font-bold text-amber-600">
+                  -¥{{ deductionResult.deduction_amount.toFixed(2) }}
+                </div>
+                <div v-else-if="calculatingDeduction" class="text-sm text-gray-500">
+                  计算中...
+                </div>
+              </div>
+            </div>
+            <div class="flex items-start gap-2 text-xs text-gray-500">
+              <Info class="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <p>100积分抵扣1元，每次最多抵扣订单金额的50%。当前可用积分可抵扣最多¥{{ (maxPointsToUse / 100).toFixed(2) }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-6 p-4 bg-gray-50 rounded-xl">
+          <h4 class="font-medium text-gray-800 mb-3">费用明细</h4>
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-500">服务原价</span>
+              <span class="text-gray-800">¥{{ originalPrice.toFixed(2) }}</span>
+            </div>
+            <div v-if="member && discountAmount > 0" class="flex justify-between">
+              <span class="text-gray-500">会员折扣</span>
+              <span class="text-green-600">-¥{{ discountAmount.toFixed(2) }}</span>
+            </div>
+            <div v-if="usePoints && deductionResult && deductionResult.deduction_amount > 0" class="flex justify-between">
+              <span class="text-gray-500">积分抵扣 ({{ deductionResult.points_used }}积分)</span>
+              <span class="text-amber-600">-¥{{ deductionResult.deduction_amount.toFixed(2) }}</span>
+            </div>
+            <div class="border-t pt-2 mt-2">
+              <div class="flex justify-between items-center">
+                <span class="font-medium text-gray-800">应付金额</span>
+                <span class="text-2xl font-bold text-orange-500">¥{{ finalPrice.toFixed(2) }}</span>
+              </div>
+              <div v-if="totalSavings > 0" class="flex justify-end mt-1">
+                <span class="text-xs text-green-600">已为您节省 ¥{{ totalSavings.toFixed(2) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <button
           type="submit"
           :disabled="submitting"
@@ -252,7 +450,7 @@ onMounted(() => {
             </svg>
             提交中...
           </span>
-          <span v-else>确认预约</span>
+          <span v-else>确认预约 · ¥{{ finalPrice.toFixed(2) }}</span>
         </button>
       </form>
     </div>
