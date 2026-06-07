@@ -56,6 +56,7 @@ app.use(
  * error handler middleware
  */
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Unhandled error:', error)
   res.status(500).json({
     success: false,
     error: 'Server internal error',

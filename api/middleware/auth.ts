@@ -12,17 +12,20 @@ export interface AuthRequest extends Request {
 }
 
 export async function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
-  const userId = req.headers['x-user-id']
-
-  if (!userId) {
-    res.status(401).json({
-      success: false,
-      error: '未登录，请先登录',
-    })
-    return
-  }
-
   try {
+    let userId = req.headers['x-user-id']
+    if (Array.isArray(userId)) {
+      userId = userId[0]
+    }
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: '未登录，请先登录',
+      })
+      return
+    }
+
     const db = await getDb()
     const user = await db.get(
       'SELECT id, username, name, phone, role FROM users WHERE id = ?',
@@ -41,10 +44,7 @@ export async function authMiddleware(req: AuthRequest, res: Response, next: Next
     req.user = user
     next()
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: '认证失败',
-    })
+    next(err)
   }
 }
 

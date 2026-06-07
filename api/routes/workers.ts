@@ -4,6 +4,21 @@ import { authMiddleware, requireRole, type AuthRequest } from '../middleware/aut
 
 const router = Router()
 
+function normalizeStatus(status: any): string {
+  if (status === 1 || status === '1' || status === 'available') return 'available'
+  return 'disabled'
+}
+
+function formatWorker(worker: any) {
+  if (!worker) return null
+  return {
+    ...worker,
+    status: normalizeStatus(worker.status),
+    skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
+    experience: 0,
+  }
+}
+
 router.get('/', async (req, res: Response): Promise<void> => {
   try {
     const db = await getDb()
@@ -16,12 +31,7 @@ router.get('/', async (req, res: Response): Promise<void> => {
 
     res.json({
       success: true,
-      data: workers.map(w => ({
-        ...w,
-        status: w.status === 1 ? 'available' : 'disabled',
-        skills: w.skills ? w.skills.split(',').filter(Boolean) : [],
-        experience: 0,
-      })),
+      data: workers.map(formatWorker),
     })
   } catch (err) {
     console.error(err)
@@ -53,12 +63,7 @@ router.get('/:id', async (req, res: Response): Promise<void> => {
 
     res.json({
       success: true,
-      data: {
-        ...worker,
-        status: worker.status === 1 ? 'available' : 'disabled',
-        skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
-        experience: 0,
-      },
+      data: formatWorker(worker),
     })
   } catch (err) {
     console.error(err)
@@ -104,8 +109,8 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
     }
 
     const result = await db.run(
-      'INSERT INTO workers (user_id, name, phone, skills) VALUES (?, ?, ?, ?)',
-      [user_id, existingUser.name, existingUser.phone || '', Array.isArray(skills) ? skills.join(',') : '']
+      'INSERT INTO workers (user_id, name, phone, skills, status) VALUES (?, ?, ?, ?, ?)',
+      [user_id, existingUser.name, existingUser.phone || '', Array.isArray(skills) ? skills.join(',') : '', 'available']
     )
 
     const worker = await db.get(`
@@ -117,12 +122,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
 
     res.json({
       success: true,
-      data: {
-        ...worker,
-        status: worker.status === 1 ? 'available' : 'disabled',
-        skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
-        experience: 0,
-      },
+      data: formatWorker(worker),
     })
   } catch (err) {
     console.error(err)
@@ -179,7 +179,7 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
         return
       }
       updates.push('status = ?')
-      values.push(status === 'available' ? 1 : 0)
+      values.push(status === 'available' ? 'available' : 'disabled')
     }
 
     if (updates.length === 0) {
@@ -207,11 +207,7 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
 
     res.json({
       success: true,
-      data: {
-        ...updatedWorker,
-        skills: updatedWorker.skills ? updatedWorker.skills.split(',').filter(Boolean) : [],
-        experience: 0,
-      },
+      data: formatWorker(updatedWorker),
     })
   } catch (err) {
     console.error(err)
