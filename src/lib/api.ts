@@ -51,6 +51,48 @@ export interface Order {
   service_name?: string
   customer_name?: string
   worker_name?: string
+  follow_up_id?: number
+  follow_up_status?: 'pending' | 'completed' | 'expired'
+  follow_up_expire_at?: string
+  attitude_rating?: number
+  quality_rating?: number
+  punctuality_rating?: number
+  feedback?: string
+  follow_up_completed_at?: string
+}
+
+export interface FollowUp {
+  id: number
+  order_id: number
+  customer_id: number
+  worker_id: number
+  attitude_rating?: number
+  quality_rating?: number
+  punctuality_rating?: number
+  feedback?: string
+  status: 'pending' | 'completed' | 'expired'
+  expire_at: string
+  created_at: string
+  completed_at?: string
+  is_expired?: boolean
+  order_no?: string
+  price?: number
+  appointment_time?: string
+  order_status?: string
+  service_name?: string
+  customer_name?: string
+  worker_name?: string
+}
+
+export interface WorkerFollowUpStats {
+  avg_attitude: number
+  avg_quality: number
+  avg_punctuality: number
+  overall_rating: number
+  total_count: number
+  completed_count: number
+  pending_count: number
+  expired_count: number
 }
 
 export interface Review {
@@ -206,4 +248,25 @@ export const memberApi = {
   calculateDeduction: (data: { points: number; order_amount: number }) =>
     request<PointsDeductionResult>('/members/calculate-deduction', { method: 'POST', body: JSON.stringify(data) }),
   levels: () => request<MemberLevel[]>('/members/levels'),
+}
+
+export const followUpApi = {
+  list: (params?: { worker_id?: number; order_id?: number; status?: string }) => {
+    const q = params ? '?' + new URLSearchParams(params as any).toString() : ''
+    return request<FollowUp[]>(`/follow-ups${q}`)
+  },
+  get: (id: number) => request<FollowUp>(`/follow-ups/${id}`),
+  getByOrder: (orderId: number) => request<FollowUp>(`/follow-ups/order/${orderId}`),
+  submit: (id: number, data: {
+    attitude_rating: number
+    quality_rating: number
+    punctuality_rating: number
+    feedback?: string
+  }) =>
+    request<FollowUp>(`/follow-ups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getWorkerStats: (workerId: number) =>
+    request<WorkerFollowUpStats>(`/follow-ups/worker/${workerId}/stats`),
 }

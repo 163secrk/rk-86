@@ -14,6 +14,8 @@ import {
   MapPin,
   Phone,
   User,
+  MessageSquareHeart,
+  AlertTriangle,
 } from 'lucide-vue-next'
 
 const { requireRole, loading: authLoading } = useAuth()
@@ -38,6 +40,27 @@ const orders = ref<Order[]>([])
 const loading = ref(false)
 const actionLoading = ref<number | null>(null)
 const expandedOrderId = ref<number | null>(null)
+
+function isFollowUpPending(order: Order): boolean {
+  if (!order.follow_up_id) return false
+  return order.follow_up_status === 'pending' && !isFollowUpExpired(order)
+}
+
+function isFollowUpExpired(order: Order): boolean {
+  if (!order.follow_up_expire_at) return false
+  return new Date(order.follow_up_expire_at) < new Date()
+}
+
+function getFollowUpStatusLabel(order: Order): { label: string; class: string; icon: any } | null {
+  if (!order.follow_up_id) return null
+  if (order.follow_up_status === 'completed') {
+    return { label: '已回访', class: 'bg-green-100 text-green-700', icon: CheckCircle }
+  }
+  if (order.follow_up_status === 'expired' || isFollowUpExpired(order)) {
+    return { label: '回访已过期', class: 'bg-gray-100 text-gray-500', icon: Clock }
+  }
+  return { label: '待回访', class: 'bg-yellow-100 text-yellow-700', icon: AlertTriangle }
+}
 
 async function loadOrders() {
   if (!requireRole('worker')) return
@@ -140,6 +163,10 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
           v-for="order in orders"
           :key="order.id"
           class="p-4 sm:p-6 hover:bg-gray-50 transition-colors"
+          :class="{
+            'bg-yellow-50 border-l-4 border-yellow-400': isFollowUpPending(order),
+            'bg-red-50 border-l-4 border-red-400': isFollowUpExpired(order) && order.follow_up_status === 'pending',
+          }"
         >
           <div
             class="cursor-pointer"
@@ -152,6 +179,13 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
                 :class="statusConfig[order.status].class"
               >
                 {{ statusConfig[order.status].label }}
+              </span>
+              <span
+                v-if="getFollowUpStatusLabel(order)"
+                :class="['inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium space-x-1', getFollowUpStatusLabel(order)!.class]"
+              >
+                <component :is="getFollowUpStatusLabel(order)!.icon" class="w-3 h-3" />
+                <span>{{ getFollowUpStatusLabel(order)!.label }}</span>
               </span>
             </div>
 
@@ -226,6 +260,34 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
               <div>
                 <span class="text-gray-500">更新时间：</span>
                 <span class="text-gray-800">{{ formatTime(order.updated_at) }}</span>
+              </div>
+            </div>
+
+            <div v-if="order.follow_up_status === 'completed'" class="mt-4 p-4 bg-green-50 rounded-lg">
+              <h4 class="font-medium text-gray-800 mb-3 flex items-center">
+                <MessageSquareHeart class="w-4 h-4 mr-2 text-green-600" />
+                回访记录
+              </h4>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mb-3">
+                <div>
+                  <span class="text-gray-500">服务态度：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.attitude_rating }}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">服务质量：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.quality_rating }}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">准时性：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.punctuality_rating }}</span>
+                </div>
+              </div>
+              <div v-if="order.feedback" class="text-sm">
+                <span class="text-gray-500">文字反馈：</span>
+                <span class="text-gray-800">{{ order.feedback }}</span>
+              </div>
+              <div class="text-xs text-gray-400 mt-2">
+                回访时间：{{ formatTime(order.follow_up_completed_at!) }}
               </div>
             </div>
           </div>

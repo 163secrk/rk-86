@@ -15,12 +15,21 @@ const ORDER_SELECT_SQL = `
     o.*,
     s.name AS service_name,
     cu.name AS customer_name,
-    wu.name AS worker_name
+    wu.name AS worker_name,
+    fu.id AS follow_up_id,
+    fu.status AS follow_up_status,
+    fu.expire_at AS follow_up_expire_at,
+    fu.attitude_rating,
+    fu.quality_rating,
+    fu.punctuality_rating,
+    fu.feedback,
+    fu.completed_at AS follow_up_completed_at
   FROM orders o
   LEFT JOIN services s ON o.service_id = s.id
   LEFT JOIN users cu ON o.customer_id = cu.id
   LEFT JOIN workers w ON o.worker_id = w.id
   LEFT JOIN users wu ON w.user_id = wu.id
+  LEFT JOIN follow_ups fu ON o.id = fu.order_id
 `
 
 router.get('/', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
@@ -411,6 +420,15 @@ router.put('/:id/status', authMiddleware, async (req: AuthRequest, res: Response
           `INSERT INTO points_records (member_id, user_id, type, points, balance, order_id, description)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [member.id, existing.customer_id, 'earn', pointsEarned, newPoints, existing.id, `订单完成，消费¥${existing.price}，获得${pointsEarned}积分`]
+        )
+      }
+
+      if (existing.worker_id) {
+        const expireAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        await db.run(
+          `INSERT OR IGNORE INTO follow_ups (order_id, customer_id, worker_id, status, expire_at)
+           VALUES (?, ?, ?, 'pending', ?)`,
+          [existing.id, existing.customer_id, existing.worker_id, expireAt]
         )
       }
     }

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import { orderApi } from '@/lib/api'
 import type { Order } from '@/lib/api'
-import { Package, Clock, CheckCircle, XCircle, Star, Loader2, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { Package, Clock, CheckCircle, XCircle, Star, Loader2, ChevronDown, ChevronUp, MessageSquareHeart, AlertTriangle } from 'lucide-vue-next'
 
 const router = useRouter()
 const { requireRole, loading: authLoading } = useAuth()
@@ -30,6 +30,28 @@ const activeTab = ref('')
 const orders = ref<Order[]>([])
 const loading = ref(false)
 const expandedOrderId = ref<number | null>(null)
+
+function isFollowUpPending(order: Order): boolean {
+  if (!order.follow_up_id) return false
+  return order.follow_up_status === 'pending' && !isFollowUpExpired(order)
+}
+
+function isFollowUpExpired(order: Order): boolean {
+  if (!order.follow_up_expire_at) return false
+  return new Date(order.follow_up_expire_at) < new Date()
+}
+
+function getFollowUpRemainingTime(order: Order): string {
+  if (!order.follow_up_expire_at) return ''
+  const now = new Date().getTime()
+  const expire = new Date(order.follow_up_expire_at).getTime()
+  const diff = expire - now
+  if (diff <= 0) return '已过期'
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  if (hours > 0) return `剩余${hours}小时${minutes}分钟`
+  return `剩余${minutes}分钟`
+}
 
 async function loadOrders() {
   if (!requireRole('customer')) return
@@ -63,6 +85,10 @@ function toggleExpand(orderId: number) {
 
 function goToReview(orderId: number) {
   router.push(`/review/${orderId}`)
+}
+
+function goToFollowUp(orderId: number) {
+  router.push(`/follow-up/${orderId}`)
 }
 
 onMounted(() => {
@@ -112,6 +138,10 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
           v-for="order in orders"
           :key="order.id"
           class="p-4 sm:p-6 hover:bg-gray-50 transition-colors"
+          :class="{
+            'bg-yellow-50 border-l-4 border-yellow-400': isFollowUpPending(order),
+            'bg-red-50 border-l-4 border-red-400': isFollowUpExpired(order) && order.follow_up_status === 'pending',
+          }"
         >
           <div
             class="flex items-center justify-between cursor-pointer"
@@ -125,6 +155,26 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
                   :class="statusConfig[order.status].class"
                 >
                   {{ statusConfig[order.status].label }}
+                </span>
+                <span
+                  v-if="isFollowUpPending(order)"
+                  class="flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700"
+                >
+                  <AlertTriangle class="w-3 h-3 mr-1" />
+                  待回访 · {{ getFollowUpRemainingTime(order) }}
+                </span>
+                <span
+                  v-else-if="order.follow_up_status === 'completed'"
+                  class="flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700"
+                >
+                  <CheckCircle class="w-3 h-3 mr-1" />
+                  已回访
+                </span>
+                <span
+                  v-else-if="order.follow_up_status === 'expired' || (order.follow_up_status === 'pending' && isFollowUpExpired(order))"
+                  class="flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500"
+                >
+                  回访已过期
                 </span>
               </div>
               <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -144,7 +194,15 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
                 </div>
                 <div class="flex items-center space-x-2">
                   <button
-                    v-if="order.status === 'completed'"
+                    v-if="isFollowUpPending(order)"
+                    @click.stop="goToFollowUp(order.id)"
+                    class="px-4 py-2 bg-yellow-500 text-white text-sm rounded-lg hover:bg-yellow-600 transition-colors flex items-center space-x-1 animate-pulse"
+                  >
+                    <MessageSquareHeart class="w-4 h-4" />
+                    <span>去回访</span>
+                  </button>
+                  <button
+                    v-if="order.status === 'completed' && order.follow_up_status === 'completed' && !order.review_id"
                     @click.stop="goToReview(order.id)"
                     class="px-4 py-2 bg-orange-500 text-white text-sm rounded-lg hover:bg-orange-600 transition-colors flex items-center space-x-1"
                   >
@@ -185,6 +243,34 @@ const isExpanded = (orderId: number) => expandedOrderId.value === orderId
               <div class="sm:col-span-2">
                 <span class="text-gray-500">创建时间：</span>
                 <span class="text-gray-800">{{ formatTime(order.created_at) }}</span>
+              </div>
+            </div>
+
+            <div v-if="order.follow_up_status === 'completed'" class="mt-4 p-4 bg-green-50 rounded-lg">
+              <h4 class="font-medium text-gray-800 mb-3 flex items-center">
+                <MessageSquareHeart class="w-4 h-4 mr-2 text-green-600" />
+                回访记录
+              </h4>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mb-3">
+                <div>
+                  <span class="text-gray-500">服务态度：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.attitude_rating }}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">服务质量：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.quality_rating }}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500">准时性：</span>
+                  <span class="text-yellow-500 font-medium">★ {{ order.punctuality_rating }}</span>
+                </div>
+              </div>
+              <div v-if="order.feedback" class="text-sm">
+                <span class="text-gray-500">文字反馈：</span>
+                <span class="text-gray-800">{{ order.feedback }}</span>
+              </div>
+              <div class="text-xs text-gray-400 mt-2">
+                回访时间：{{ formatTime(order.follow_up_completed_at!) }}
               </div>
             </div>
           </div>

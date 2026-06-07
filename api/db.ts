@@ -127,6 +127,26 @@ export async function initDb() {
     )
   `)
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS follow_ups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER UNIQUE NOT NULL,
+      customer_id INTEGER NOT NULL,
+      worker_id INTEGER NOT NULL,
+      attitude_rating INTEGER,
+      quality_rating INTEGER,
+      punctuality_rating INTEGER,
+      feedback TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      expire_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
+      FOREIGN KEY (order_id) REFERENCES orders(id),
+      FOREIGN KEY (customer_id) REFERENCES users(id),
+      FOREIGN KEY (worker_id) REFERENCES workers(id)
+    )
+  `)
+
   const adminCount = await db.get('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin'])
   if (adminCount.count === 0) {
     const bcrypt = await import('bcryptjs')

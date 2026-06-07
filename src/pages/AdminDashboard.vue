@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuth } from '@/composables/useAuth'
-import { orderApi, workerApi, type Order, type Worker } from '@/lib/api'
+import { orderApi, workerApi, followUpApi, type Order, type Worker, type WorkerFollowUpStats } from '@/lib/api'
+import { MessageSquareHeart, AlertTriangle, CheckCircle, Clock } from 'lucide-vue-next'
 
 const { user, loading: authLoading, requireRole } = useAuth()
 
@@ -17,6 +18,8 @@ const selectedWorkerId = ref<number | null>(null)
 const availableWorkers = ref<Worker[]>([])
 const assignLoading = ref(false)
 
+const workerStatsMap = ref<Record<number, WorkerFollowUpStats>>({})
+
 const filteredOrders = computed(() => {
   if (!statusFilter.value) return orders.value
   return orders.value.filter(o => o.status === statusFilter.value)
@@ -28,6 +31,32 @@ const avgRating = computed(() => {
   const sum = activeWorkers.reduce((acc, w) => acc + w.rating, 0)
   return (sum / activeWorkers.length).toFixed(1)
 })
+
+const pendingFollowUpCount = computed(() => {
+  return orders.value.filter(o => o.follow_up_status === 'pending' && !isFollowUpExpired(o)).length
+})
+
+const expiredFollowUpCount = computed(() => {
+  return orders.value.filter(o => o.follow_up_status === 'pending' && isFollowUpExpired(o)).length
+})
+
+function isFollowUpExpired(order: Order): boolean {
+  if (!order.follow_up_expire_at) return false
+  return new Date(order.follow_up_expire_at) < new Date()
+}
+
+function getFollowUpStatusLabel(order: Order): { label: string; class: string; icon: any } {
+  if (!order.follow_up_id) {
+    return { label: '无', class: 'bg-gray-100 text-gray-500', icon: null }
+  }
+  if (order.follow_up_status === 'completed') {
+    return { label: '已回访', class: 'bg-green-100 text-green-700', icon: CheckCircle }
+  }
+  if (order.follow_up_status === 'expired' || isFollowUpExpired(order)) {
+    return { label: '已过期', class: 'bg-gray-100 text-gray-500', icon: Clock }
+  }
+  return { label: '待回访', class: 'bg-yellow-100 text-yellow-700', icon: AlertTriangle }
+}
 
 const statusMap: Record<string, { label: string; color: string }> = {
   pending: { label: '待派单', color: 'bg-yellow-100 text-yellow-800' },
@@ -50,7 +79,15 @@ async function loadData() {
       workerApi.list(),
     ])
     if (ordersRes.success) orders.value = ordersRes.data || []
-    if (workersRes.success) workers.value = workersRes.data || []
+    if (workersRes.success) {
+      workers.value = workersRes.data || []
+      for (const worker of workers.value) {
+        const statsRes = await followUpApi.getWorkerStats(worker.id)
+        if (statsRes.success && statsRes.data) {
+          workerStatsMap.value[worker.id] = statsRes.data
+        }
+      }
+    }
   } finally {
     loading.value = false
   }
@@ -158,6 +195,42 @@ function formatDate(dateStr: string) {
     </div>
 
     <div v-if="activeTab === 'orders'" class="space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl border p-4">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+              <MessageSquareHeart class="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <p class="text-sm text-gray-500">总订单数</p>
+              <p class="text-xl font-bold text-gray-800">{{ orders.length }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border p-4">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
+              <AlertTriangle class="w-5 h-5 text-yellow-600" />
+            </div>
+            <div>
+              <p class="text-sm text-gray-500">待回访</p>
+              <p class="text-xl font-bold text-yellow-600">{{ pendingFollowUpCount }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border p-4">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+              <Clock class="w-5 h-5 text-gray-500" />
+            </div>
+            <div>
+              <p class="text-sm text-gray-500">已过期</p>
+              <p class="text-xl font-bold text-gray-500">{{ expiredFollowUpCount }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="flex flex-wrap gap-2">
         <button
           @click="statusFilter = ''"
@@ -203,12 +276,21 @@ function formatDate(dateStr: string) {
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">联系人</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">金额</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">回访状态</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">创建时间</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
-              <tr v-for="order in filteredOrders" :key="order.id" class="hover:bg-gray-50">
+              <tr
+                v-for="order in filteredOrders"
+                :key="order.id"
+                class="hover:bg-gray-50"
+                :class="{
+                  'bg-yellow-50': order.follow_up_status === 'pending' && !isFollowUpExpired(order),
+                  'bg-red-50': order.follow_up_status === 'pending' && isFollowUpExpired(order),
+                }"
+              >
                 <td class="px-4 py-4 text-sm text-gray-900">{{ order.order_no }}</td>
                 <td class="px-4 py-4 text-sm text-gray-900">{{ order.service_name || '-' }}</td>
                 <td class="px-4 py-4 text-sm text-gray-900">
@@ -219,6 +301,21 @@ function formatDate(dateStr: string) {
                 <td class="px-4 py-4">
                   <span :class="['px-2 py-1 rounded-full text-xs font-medium', statusMap[order.status].color]">
                     {{ statusMap[order.status].label }}
+                  </span>
+                </td>
+                <td class="px-4 py-4">
+                  <span
+                    v-if="getFollowUpStatusLabel(order).icon"
+                    :class="['inline-flex items-center px-2 py-1 rounded-full text-xs font-medium space-x-1', getFollowUpStatusLabel(order).class]"
+                  >
+                    <component :is="getFollowUpStatusLabel(order).icon" class="w-3 h-3" />
+                    <span>{{ getFollowUpStatusLabel(order).label }}</span>
+                  </span>
+                  <span
+                    v-else
+                    :class="['px-2 py-1 rounded-full text-xs font-medium', getFollowUpStatusLabel(order).class]"
+                  >
+                    {{ getFollowUpStatusLabel(order).label }}
                   </span>
                 </td>
                 <td class="px-4 py-4 text-sm text-gray-500">{{ formatDate(order.created_at) }}</td>
@@ -246,13 +343,48 @@ function formatDate(dateStr: string) {
     </div>
 
     <div v-if="activeTab === 'workers'" class="space-y-4">
-      <div class="bg-blue-50 rounded-xl p-4 flex items-center space-x-4">
-        <div class="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center">
-          <span class="text-white text-xl font-bold">{{ avgRating }}</span>
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <div class="bg-blue-50 rounded-xl p-4 flex items-center space-x-4">
+          <div class="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center">
+            <span class="text-white text-xl font-bold">{{ avgRating }}</span>
+          </div>
+          <div>
+            <p class="text-sm text-gray-600">平均评分</p>
+            <p class="text-2xl font-bold text-blue-600">{{ avgRating }} / 5.0</p>
+          </div>
         </div>
-        <div>
-          <p class="text-sm text-gray-600">平均评分</p>
-          <p class="text-2xl font-bold text-blue-600">{{ avgRating }} / 5.0</p>
+        <div class="bg-green-50 rounded-xl p-4 flex items-center space-x-4">
+          <div class="w-12 h-12 bg-green-600 rounded-xl flex items-center justify-center">
+            <MessageSquareHeart class="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p class="text-sm text-gray-600">总回访数</p>
+            <p class="text-2xl font-bold text-green-600">
+              {{ Object.values(workerStatsMap).reduce((sum, s) => sum + s.completed_count, 0) }}
+            </p>
+          </div>
+        </div>
+        <div class="bg-yellow-50 rounded-xl p-4 flex items-center space-x-4">
+          <div class="w-12 h-12 bg-yellow-500 rounded-xl flex items-center justify-center">
+            <AlertTriangle class="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p class="text-sm text-gray-600">待回访</p>
+            <p class="text-2xl font-bold text-yellow-600">
+              {{ Object.values(workerStatsMap).reduce((sum, s) => sum + s.pending_count, 0) }}
+            </p>
+          </div>
+        </div>
+        <div class="bg-gray-50 rounded-xl p-4 flex items-center space-x-4">
+          <div class="w-12 h-12 bg-gray-500 rounded-xl flex items-center justify-center">
+            <Clock class="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p class="text-sm text-gray-600">已过期</p>
+            <p class="text-2xl font-bold text-gray-600">
+              {{ Object.values(workerStatsMap).reduce((sum, s) => sum + s.expired_count, 0) }}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -272,9 +404,11 @@ function formatDate(dateStr: string) {
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">姓名</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">电话</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">技能</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">经验</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">评分</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">订单数</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">综合评分</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">服务态度</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">服务质量</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">准时性</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">回访数</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
@@ -294,11 +428,21 @@ function formatDate(dateStr: string) {
                     </span>
                   </div>
                 </td>
-                <td class="px-4 py-4 text-sm text-gray-900">{{ worker.experience }}年</td>
                 <td class="px-4 py-4 text-sm">
-                  <span class="text-yellow-500 font-medium">{{ worker.rating }}</span>
+                  <span class="text-yellow-500 font-medium">★ {{ worker.rating }}</span>
                 </td>
-                <td class="px-4 py-4 text-sm text-gray-900">{{ worker.order_count }}</td>
+                <td class="px-4 py-4 text-sm text-gray-600">
+                  {{ workerStatsMap[worker.id]?.avg_attitude?.toFixed(1) || '-' }}
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-600">
+                  {{ workerStatsMap[worker.id]?.avg_quality?.toFixed(1) || '-' }}
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-600">
+                  {{ workerStatsMap[worker.id]?.avg_punctuality?.toFixed(1) || '-' }}
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-900">
+                  {{ workerStatsMap[worker.id]?.completed_count || 0 }}
+                </td>
                 <td class="px-4 py-4">
                   <span
                     :class="[

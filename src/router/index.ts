@@ -7,6 +7,7 @@ import CustomerOrdersPage from '@/pages/CustomerOrdersPage.vue'
 import WorkerOrdersPage from '@/pages/WorkerOrdersPage.vue'
 import AdminDashboard from '@/pages/AdminDashboard.vue'
 import ReviewPage from '@/pages/ReviewPage.vue'
+import FollowUpPage from '@/pages/FollowUpPage.vue'
 import MemberCenter from '@/pages/MemberCenter.vue'
 
 const routes = [
@@ -49,6 +50,11 @@ const routes = [
     path: '/review/:orderId',
     name: 'review',
     component: ReviewPage,
+  },
+  {
+    path: '/follow-up/:orderId',
+    name: 'follow-up',
+    component: FollowUpPage,
   },
   {
     path: '/member',
