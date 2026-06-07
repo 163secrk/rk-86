@@ -91,6 +91,16 @@ async function loadService() {
   }
 }
 
+function formatDateTimeLocal(dateStr: string): string {
+  const d = new Date(dateStr)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:00`
+}
+
 async function handleSubmit() {
   if (!validateForm() || !service.value) return
 
@@ -101,7 +111,8 @@ async function handleSubmit() {
       contact_name: form.contact_name,
       contact_phone: form.contact_phone,
       address: form.address,
-      appointment_time: form.appointment_time,
+      appointment_time: formatDateTimeLocal(form.appointment_time),
+      price: service.value.price,
       remark: form.remark,
     })
 

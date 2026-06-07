@@ -18,6 +18,7 @@ router.get('/', async (req, res: Response): Promise<void> => {
       success: true,
       data: workers.map(w => ({
         ...w,
+        status: w.status === 1 ? 'available' : 'disabled',
         skills: w.skills ? w.skills.split(',').filter(Boolean) : [],
         experience: 0,
       })),
@@ -54,6 +55,7 @@ router.get('/:id', async (req, res: Response): Promise<void> => {
       success: true,
       data: {
         ...worker,
+        status: worker.status === 1 ? 'available' : 'disabled',
         skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
         experience: 0,
       },
@@ -117,6 +119,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req: AuthRequest, 
       success: true,
       data: {
         ...worker,
+        status: worker.status === 1 ? 'available' : 'disabled',
         skills: worker.skills ? worker.skills.split(',').filter(Boolean) : [],
         experience: 0,
       },
@@ -176,7 +179,7 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
         return
       }
       updates.push('status = ?')
-      values.push(status)
+      values.push(status === 'available' ? 1 : 0)
     }
 
     if (updates.length === 0) {

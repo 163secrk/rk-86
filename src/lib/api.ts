@@ -123,6 +123,7 @@ export const orderApi = {
     contact_phone: string
     address: string
     appointment_time: string
+    price: number
     remark?: string
   }) => request<Order>('/orders', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<Order>) =>
