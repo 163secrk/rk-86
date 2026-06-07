@@ -9,6 +9,8 @@ import AdminDashboard from '@/pages/AdminDashboard.vue'
 import ReviewPage from '@/pages/ReviewPage.vue'
 import FollowUpPage from '@/pages/FollowUpPage.vue'
 import MemberCenter from '@/pages/MemberCenter.vue'
+import PackageDetail from '@/pages/PackageDetail.vue'
+import PackageManagement from '@/pages/PackageManagement.vue'
 
 const routes = [
   {
@@ -32,6 +34,16 @@ const routes = [
     component: BookingPage,
   },
   {
+    path: '/booking/package/:packageId',
+    name: 'booking-package',
+    component: BookingPage,
+  },
+  {
+    path: '/package/:packageId',
+    name: 'package-detail',
+    component: PackageDetail,
+  },
+  {
     path: '/orders',
     name: 'orders',
     component: CustomerOrdersPage,
@@ -45,6 +57,11 @@ const routes = [
     path: '/admin',
     name: 'admin',
     component: AdminDashboard,
+  },
+  {
+    path: '/admin/packages',
+    name: 'admin-packages',
+    component: PackageManagement,
   },
   {
     path: '/review/:orderId',

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { serviceApi, orderApi, memberApi, type Service, type Member, type PointsDeductionResult } from '@/lib/api'
+import { serviceApi, orderApi, memberApi, packageApi, type Service, type Package, type Member, type PointsDeductionResult } from '@/lib/api'
 import { useAuth } from '@/composables/useAuth'
 import Empty from '@/components/Empty.vue'
 import { Crown, Coins, Info, Minus, Plus } from 'lucide-vue-next'
@@ -11,6 +11,7 @@ const router = useRouter()
 const { requireAuth, user } = useAuth()
 
 const service = ref<Service | null>(null)
+const package_ = ref<Package | null>(null)
 const member = ref<Member | null>(null)
 const loading = ref(true)
 const submitting = ref(false)
@@ -35,6 +36,9 @@ const errors = reactive({
 })
 
 const serviceId = computed(() => Number(route.params.serviceId))
+const packageId = computed(() => Number(route.params.packageId))
+
+const isPackageBooking = computed(() => !!packageId.value && !serviceId.value)
 
 const levelColors: Record<string, { bg: string; text: string }> = {
   '普通': { bg: 'bg-gray-100', text: 'text-gray-600' },
@@ -43,15 +47,35 @@ const levelColors: Record<string, { bg: string; text: string }> = {
   '钻石': { bg: 'bg-cyan-100', text: 'text-cyan-700' },
 }
 
-const originalPrice = computed(() => service.value?.price || 0)
+const originalPrice = computed(() => {
+  if (isPackageBooking.value) {
+    return package_.value?.package_original_price || 0
+  }
+  return service.value?.price || 0
+})
+
+const packagePrice = computed(() => {
+  return package_.value?.package_price || 0
+})
 
 const discountedPrice = computed(() => {
+  if (isPackageBooking.value) {
+    return packagePrice.value
+  }
   if (!member.value) return originalPrice.value
   return Math.round(originalPrice.value * member.value.discount * 100) / 100
 })
 
 const discountAmount = computed(() => {
+  if (isPackageBooking.value) {
+    return 0
+  }
   return Math.round((originalPrice.value - discountedPrice.value) * 100) / 100
+})
+
+const packageSavings = computed(() => {
+  if (!isPackageBooking.value) return 0
+  return Math.round((originalPrice.value - packagePrice.value) * 100) / 100
 })
 
 const finalPrice = computed(() => {
@@ -60,7 +84,7 @@ const finalPrice = computed(() => {
 })
 
 const totalSavings = computed(() => {
-  return Math.round((discountAmount.value + (deductionResult.value?.deduction_amount || 0)) * 100) / 100
+  return Math.round((packageSavings.value + discountAmount.value + (deductionResult.value?.deduction_amount || 0)) * 100) / 100
 })
 
 const maxPointsToUse = computed(() => {
@@ -69,7 +93,7 @@ const maxPointsToUse = computed(() => {
   return Math.min(member.value.points, maxByHalfPrice)
 })
 
-watch([usePoints, pointsToUse, service], async () => {
+watch([usePoints, pointsToUse, service, package_], async () => {
   if (usePoints.value && pointsToUse.value > 0 && discountedPrice.value > 0) {
     await calculateDeduction()
   } else {
@@ -150,25 +174,36 @@ function validateForm(): boolean {
   return valid
 }
 
-async function loadService() {
+async function loadBookingData() {
   try {
     loading.value = true
-    const [serviceRes, memberRes] = await Promise.all([
-      serviceApi.get(serviceId.value),
-      memberApi.profile().catch(() => null),
-    ])
-    if (serviceRes.success && serviceRes.data) {
-      service.value = serviceRes.data
-      if (user.value) {
-        form.contact_name = user.value.name
-        form.contact_phone = user.value.phone || ''
+    const memberRes = await memberApi.profile().catch(() => null)
+    
+    if (isPackageBooking.value) {
+      const packageRes = await packageApi.get(packageId.value)
+      if (packageRes.success && packageRes.data) {
+        package_.value = packageRes.data
+        if (user.value) {
+          form.contact_name = user.value.name
+          form.contact_phone = user.value.phone || ''
+        }
+      }
+    } else {
+      const serviceRes = await serviceApi.get(serviceId.value)
+      if (serviceRes.success && serviceRes.data) {
+        service.value = serviceRes.data
+        if (user.value) {
+          form.contact_name = user.value.name
+          form.contact_phone = user.value.phone || ''
+        }
       }
     }
+    
     if (memberRes && memberRes.success && memberRes.data) {
       member.value = memberRes.data
     }
   } catch (e) {
-    console.error('Failed to load service:', e)
+    console.error('Failed to load booking data:', e)
   } finally {
     loading.value = false
   }
@@ -185,12 +220,13 @@ function formatDateTimeLocal(dateStr: string): string {
 }
 
 async function handleSubmit() {
-  if (!validateForm() || !service.value) return
+  if (!validateForm()) return
+  if (isPackageBooking.value && !package_.value) return
+  if (!isPackageBooking.value && !service.value) return
 
   try {
     submitting.value = true
-    const res = await orderApi.create({
-      service_id: service.value.id,
+    const orderData: any = {
       contact_name: form.contact_name,
       contact_phone: form.contact_phone,
       address: form.address,
@@ -198,7 +234,15 @@ async function handleSubmit() {
       price: finalPrice.value,
       remark: form.remark,
       use_points: usePoints.value && deductionResult.value ? deductionResult.value.points_used : 0,
-    } as any)
+    }
+
+    if (isPackageBooking.value) {
+      orderData.package_id = package_.value!.id
+    } else {
+      orderData.service_id = service.value!.id
+    }
+
+    const res = await orderApi.create(orderData)
 
     if (res.success) {
       router.push('/orders')
@@ -215,13 +259,13 @@ async function handleSubmit() {
 
 onMounted(() => {
   if (!requireAuth()) return
-  loadService()
+  loadBookingData()
 })
 </script>
 
 <template>
   <div class="max-w-3xl mx-auto">
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">预约服务</h1>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">{{ isPackageBooking ? '预约套餐' : '预约服务' }}</h1>
 
     <div v-if="loading" class="grid md:grid-cols-2 gap-6">
       <div class="bg-white rounded-xl shadow-sm p-4 animate-pulse">
@@ -235,18 +279,18 @@ onMounted(() => {
       </div>
     </div>
 
-    <Empty v-else-if="!service" />
+    <Empty v-else-if="isPackageBooking ? !package_ : !service" />
 
     <div v-else class="grid md:grid-cols-2 gap-6">
       <div class="bg-white rounded-xl shadow-sm overflow-hidden">
         <img
-          :src="service.image"
-          :alt="service.name"
+          :src="isPackageBooking ? package_.image : service.image"
+          :alt="isPackageBooking ? package_.name : service.name"
           class="w-full aspect-[4/3] object-cover"
         />
         <div class="p-4">
           <div class="flex items-start justify-between mb-2">
-            <h2 class="text-xl font-semibold text-gray-800">{{ service.name }}</h2>
+            <h2 class="text-xl font-semibold text-gray-800">{{ isPackageBooking ? package_.name : service.name }}</h2>
             <div
               v-if="member"
               :class="[
@@ -259,26 +303,82 @@ onMounted(() => {
               <span>{{ member.level }}会员</span>
             </div>
           </div>
-          <div class="mb-3">
-            <div class="flex items-baseline gap-2">
-              <span v-if="member && discountAmount > 0" class="text-sm text-gray-400 line-through">
-                ¥{{ originalPrice.toFixed(2) }}
-              </span>
-              <span class="text-2xl font-bold text-orange-500">
-                ¥{{ discountedPrice.toFixed(2) }}
-              </span>
-              <span class="text-sm text-gray-500">/{{ service.unit }}</span>
+
+          <template v-if="isPackageBooking">
+            <div class="mb-3">
+              <div class="flex items-baseline gap-2">
+                <span class="text-sm text-gray-400 line-through">
+                  ¥{{ originalPrice.toFixed(2) }}
+                </span>
+                <span class="text-2xl font-bold text-orange-500">
+                  ¥{{ packagePrice.toFixed(2) }}
+                </span>
+              </div>
+              <div class="flex items-center gap-2 mt-1">
+                <span class="text-xs bg-green-100 text-green-600 px-2 py-0.5 rounded">
+                  套餐优惠
+                </span>
+                <span class="text-xs text-green-600">
+                  已节省 ¥{{ packageSavings.toFixed(2) }}
+                </span>
+              </div>
+              <div v-if="member" class="mt-2 text-xs text-orange-500 flex items-center gap-1">
+                <Info class="w-3 h-3" />
+                <span>套餐不享受会员折扣</span>
+              </div>
             </div>
-            <div v-if="member && discountAmount > 0" class="flex items-center gap-2 mt-1">
-              <span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">
-                {{ (member.discount * 10).toFixed(1) }}折
-              </span>
-              <span class="text-xs text-green-600">
-                已优惠 ¥{{ discountAmount.toFixed(2) }}
-              </span>
+
+            <div class="mb-3">
+              <h4 class="text-sm font-medium text-gray-700 mb-2">套餐包含服务</h4>
+              <div class="space-y-2">
+                <div
+                  v-for="pkgService in package_.services"
+                  :key="pkgService.package_service_id"
+                  class="flex items-center justify-between p-2 bg-gray-50 rounded-lg"
+                >
+                  <div class="flex items-center gap-2">
+                    <img
+                      :src="pkgService.image"
+                      :alt="pkgService.name"
+                      class="w-10 h-10 rounded object-cover"
+                    />
+                    <div>
+                      <div class="text-sm font-medium text-gray-800">{{ pkgService.name }}</div>
+                      <div class="text-xs text-gray-500">x{{ pkgService.quantity }}</div>
+                    </div>
+                  </div>
+                  <div class="text-right">
+                    <div class="text-sm text-gray-800">¥{{ pkgService.price.toFixed(2) }}</div>
+                    <div class="text-xs text-gray-500">/{{ pkgService.unit }}</div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <p class="text-sm text-gray-600">{{ service.description }}</p>
+          </template>
+
+          <template v-else>
+            <div class="mb-3">
+              <div class="flex items-baseline gap-2">
+                <span v-if="member && discountAmount > 0" class="text-sm text-gray-400 line-through">
+                  ¥{{ originalPrice.toFixed(2) }}
+                </span>
+                <span class="text-2xl font-bold text-orange-500">
+                  ¥{{ discountedPrice.toFixed(2) }}
+                </span>
+                <span class="text-sm text-gray-500">/{{ service.unit }}</span>
+              </div>
+              <div v-if="member && discountAmount > 0" class="flex items-center gap-2 mt-1">
+                <span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">
+                  {{ (member.discount * 10).toFixed(1) }}折
+                </span>
+                <span class="text-xs text-green-600">
+                  已优惠 ¥{{ discountAmount.toFixed(2) }}
+                </span>
+              </div>
+            </div>
+          </template>
+
+          <p class="text-sm text-gray-600">{{ isPackageBooking ? package_.description : service.description }}</p>
         </div>
       </div>
 
@@ -415,10 +515,14 @@ onMounted(() => {
           <h4 class="font-medium text-gray-800 mb-3">费用明细</h4>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-gray-500">服务原价</span>
+              <span class="text-gray-500">{{ isPackageBooking ? '套餐原价' : '服务原价' }}</span>
               <span class="text-gray-800">¥{{ originalPrice.toFixed(2) }}</span>
             </div>
-            <div v-if="member && discountAmount > 0" class="flex justify-between">
+            <div v-if="isPackageBooking && packageSavings > 0" class="flex justify-between">
+              <span class="text-gray-500">套餐优惠</span>
+              <span class="text-green-600">-¥{{ packageSavings.toFixed(2) }}</span>
+            </div>
+            <div v-if="!isPackageBooking && member && discountAmount > 0" class="flex justify-between">
               <span class="text-gray-500">会员折扣</span>
               <span class="text-green-600">-¥{{ discountAmount.toFixed(2) }}</span>
             </div>

@@ -147,6 +147,67 @@ export async function initDb() {
     )
   `)
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS packages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      price REAL NOT NULL,
+      original_price REAL NOT NULL,
+      image TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS package_services (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      package_id INTEGER NOT NULL,
+      service_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (package_id) REFERENCES packages(id),
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      UNIQUE(package_id, service_id)
+    )
+  `)
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS order_subtasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_order_id INTEGER NOT NULL,
+      service_id INTEGER NOT NULL,
+      worker_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (parent_order_id) REFERENCES orders(id),
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      FOREIGN KEY (worker_id) REFERENCES workers(id)
+    )
+  `)
+
+  async function columnExists(tableName: string, columnName: string): Promise<boolean> {
+    try {
+      const columns = await db.all(`PRAGMA table_info(${tableName})`)
+      return columns.some((col: any) => col.name === columnName)
+    } catch {
+      return false
+    }
+  }
+
+  if (!await columnExists('orders', 'package_id')) {
+    await db.exec(`ALTER TABLE orders ADD COLUMN package_id INTEGER REFERENCES packages(id)`)
+  }
+  if (!await columnExists('orders', 'is_package_order')) {
+    await db.exec(`ALTER TABLE orders ADD COLUMN is_package_order INTEGER NOT NULL DEFAULT 0`)
+  }
+  if (!await columnExists('orders', 'subtotal_price')) {
+    await db.exec(`ALTER TABLE orders ADD COLUMN subtotal_price REAL`)
+  }
+
   const adminCount = await db.get('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin'])
   if (adminCount.count === 0) {
     const bcrypt = await import('bcryptjs')
@@ -166,12 +227,77 @@ export async function initDb() {
       { name: '保姆服务', description: '住家或钟点工保姆服务，照顾老人小孩、做饭等', price: 50, unit: '小时', duration: 480, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=nanny%20service%20professional%20caregiver&image_size=square_hd' },
       { name: '月嫂服务', description: '专业月嫂服务，照顾产妇和新生儿', price: 800, unit: '天', duration: 1440, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=maternity%20nurse%20baby%20care&image_size=square_hd' },
       { name: '维修服务', description: '水电维修、家具安装维修等家庭维修服务', price: 80, unit: '次', duration: 60, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=home%20repair%20service%20handyman&image_size=square_hd' },
+      { name: '擦玻璃', description: '专业擦玻璃服务，包括室内外玻璃清洁、窗框清理', price: 80, unit: '次', duration: 60, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=window%20cleaning%20service%20professional&image_size=square_hd' },
+      { name: '厨房清洁', description: '厨房深度清洁，包括灶台、油烟机、橱柜表面等', price: 120, unit: '次', duration: 90, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=kitchen%20cleaning%20service%20professional&image_size=square_hd' },
+      { name: '卫生间清洁', description: '卫生间深度清洁，包括马桶、洗手台、地面消毒等', price: 100, unit: '次', duration: 60, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=bathroom%20cleaning%20service%20professional&image_size=square_hd' },
+      { name: '地板打蜡', description: '实木地板专业清洁打蜡保养服务', price: 150, unit: '次', duration: 90, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=floor%20waxing%20service%20professional&image_size=square_hd' },
+      { name: '沙发清洗', description: '布艺沙发、真皮沙发专业清洁保养', price: 180, unit: '次', duration: 90, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=sofa%20cleaning%20service%20professional&image_size=square_hd' },
+      { name: '窗帘清洗', description: '窗帘专业拆卸清洗安装服务', price: 200, unit: '次', duration: 120, image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=curtain%20cleaning%20service%20professional&image_size=square_hd' },
     ]
     for (const s of services) {
       await db.run(
         'INSERT INTO services (name, description, price, unit, duration, image) VALUES (?, ?, ?, ?, ?, ?)',
         [s.name, s.description, s.price, s.unit, s.duration, s.image]
       )
+    }
+  }
+
+  const packageCount = await db.get('SELECT COUNT(*) as count FROM packages')
+  if (packageCount.count === 0) {
+    const services = await db.all('SELECT id, name, price FROM services')
+    const serviceMap: Record<string, number> = {}
+    services.forEach((s: any) => { serviceMap[s.name] = s.id })
+
+    const packages = [
+      {
+        name: '深度保洁套餐',
+        description: '超值深度保洁套餐，包含擦玻璃+厨房清洁+卫生间清洁，一站式搞定全屋清洁',
+        price: 268,
+        original_price: 300,
+        image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=deep%20cleaning%20package%20combo%20service&image_size=square_hd',
+        services: [
+          { service_id: serviceMap['擦玻璃'], quantity: 1 },
+          { service_id: serviceMap['厨房清洁'], quantity: 1 },
+          { service_id: serviceMap['卫生间清洁'], quantity: 1 },
+        ],
+      },
+      {
+        name: '新居开荒套餐',
+        description: '新房入住前全面清洁，包含深度保洁+地板打蜡+擦玻璃，让您安心入住',
+        price: 498,
+        original_price: 530,
+        image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=new%20house%20cleaning%20package%20service&image_size=square_hd',
+        services: [
+          { service_id: serviceMap['深度保洁'], quantity: 1 },
+          { service_id: serviceMap['地板打蜡'], quantity: 1 },
+          { service_id: serviceMap['擦玻璃'], quantity: 1 },
+        ],
+      },
+      {
+        name: '焕新家套餐',
+        description: '全屋焕新套餐，包含沙发清洗+窗帘清洗+厨房清洁，让家焕然一新',
+        price: 458,
+        original_price: 500,
+        image: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=home%20refresh%20cleaning%20package%20service&image_size=square_hd',
+        services: [
+          { service_id: serviceMap['沙发清洗'], quantity: 1 },
+          { service_id: serviceMap['窗帘清洗'], quantity: 1 },
+          { service_id: serviceMap['厨房清洁'], quantity: 1 },
+        ],
+      },
+    ]
+
+    for (const pkg of packages) {
+      const result = await db.run(
+        'INSERT INTO packages (name, description, price, original_price, image) VALUES (?, ?, ?, ?, ?)',
+        [pkg.name, pkg.description, pkg.price, pkg.original_price, pkg.image]
+      )
+      for (const ps of pkg.services) {
+        await db.run(
+          'INSERT INTO package_services (package_id, service_id, quantity) VALUES (?, ?, ?)',
+          [result.lastID, ps.service_id, ps.quantity]
+        )
+      }
     }
   }
 

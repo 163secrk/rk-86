@@ -14,6 +14,7 @@ const ORDER_SELECT_SQL = `
   SELECT 
     o.*,
     s.name AS service_name,
+    p.name AS package_name,
     cu.name AS customer_name,
     wu.name AS worker_name,
     fu.id AS follow_up_id,
@@ -26,6 +27,7 @@ const ORDER_SELECT_SQL = `
     fu.completed_at AS follow_up_completed_at
   FROM orders o
   LEFT JOIN services s ON o.service_id = s.id
+  LEFT JOIN packages p ON o.package_id = p.id
   LEFT JOIN users cu ON o.customer_id = cu.id
   LEFT JOIN workers w ON o.worker_id = w.id
   LEFT JOIN users wu ON w.user_id = wu.id
@@ -80,9 +82,9 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
     }
 
     const order = await db.get(sql, params)
-    await db.close()
 
     if (!order) {
+      await db.close()
       res.status(404).json({
         success: false,
         error: '订单不存在或无权限查看',
@@ -90,9 +92,32 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
       return
     }
 
+    let subtasks: any[] = []
+    if (order.is_package_order) {
+      subtasks = await db.all(`
+        SELECT 
+          os.*,
+          s.name AS service_name,
+          s.description AS service_description,
+          s.price AS service_price,
+          wu.name AS worker_name
+        FROM order_subtasks os
+        LEFT JOIN services s ON os.service_id = s.id
+        LEFT JOIN workers w ON os.worker_id = w.id
+        LEFT JOIN users wu ON w.user_id = wu.id
+        WHERE os.parent_order_id = ?
+        ORDER BY os.id ASC
+      `, [id])
+    }
+
+    await db.close()
+
     res.json({
       success: true,
-      data: order,
+      data: {
+        ...order,
+        subtasks,
+      },
     })
   } catch (err) {
     console.error(err)
@@ -105,9 +130,9 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response): Prom
 
 router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { service_id, contact_name, contact_phone, address, appointment_time, price, remark, use_points = 0 } = req.body
+    const { service_id, package_id, contact_name, contact_phone, address, appointment_time, price, remark, use_points = 0 } = req.body
 
-    if (!service_id || !contact_name || !contact_phone || !address || !appointment_time || !price) {
+    if ((!service_id && !package_id) || !contact_name || !contact_phone || !address || !appointment_time || !price) {
       res.status(400).json({
         success: false,
         error: '请填写完整的订单信息',
@@ -117,14 +142,46 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promis
 
     const db = await getDb()
 
-    const service = await db.get('SELECT id FROM services WHERE id = ?', [service_id])
-    if (!service) {
-      await db.close()
-      res.status(404).json({
-        success: false,
-        error: '服务不存在',
-      })
-      return
+    let isPackageOrder = false
+    let packageServices: any[] = []
+
+    if (package_id) {
+      isPackageOrder = true
+      const pkg = await db.get('SELECT * FROM packages WHERE id = ? AND status = ?', [package_id, 'active'])
+      if (!pkg) {
+        await db.close()
+        res.status(404).json({
+          success: false,
+          error: '套餐不存在或已下架',
+        })
+        return
+      }
+
+      packageServices = await db.all(`
+        SELECT ps.*, s.name, s.price, s.duration
+        FROM package_services ps
+        JOIN services s ON ps.service_id = s.id
+        WHERE ps.package_id = ?
+      `, [package_id])
+
+      if (packageServices.length === 0) {
+        await db.close()
+        res.status(400).json({
+          success: false,
+          error: '套餐未包含任何服务',
+        })
+        return
+      }
+    } else {
+      const service = await db.get('SELECT id FROM services WHERE id = ?', [service_id])
+      if (!service) {
+        await db.close()
+        res.status(404).json({
+          success: false,
+          error: '服务不存在',
+        })
+        return
+      }
     }
 
     const orderNo = generateOrderNo()
@@ -171,10 +228,20 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promis
 
     const result = await db.run(
       `INSERT INTO orders 
-       (order_no, customer_id, service_id, contact_name, contact_phone, address, appointment_time, price, status, remark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      [orderNo, customerId, service_id, contact_name, contact_phone, address, appointment_time, finalPrice, remark || '']
+       (order_no, customer_id, service_id, package_id, is_package_order, contact_name, contact_phone, address, appointment_time, price, subtotal_price, status, remark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [orderNo, customerId, isPackageOrder ? packageServices[0].service_id : service_id, package_id || null, isPackageOrder ? 1 : 0, contact_name, contact_phone, address, appointment_time, finalPrice, price, remark || '']
     )
+
+    if (isPackageOrder) {
+      for (const ps of packageServices) {
+        await db.run(
+          `INSERT INTO order_subtasks (parent_order_id, service_id, status)
+           VALUES (?, ?, 'pending')`,
+          [result.lastID, ps.service_id]
+        )
+      }
+    }
 
     if (pointsUsed > 0) {
       const member = await db.get('SELECT id, points FROM members WHERE user_id = ?', [customerId])
@@ -188,12 +255,30 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promis
     }
 
     const order = await db.get(ORDER_SELECT_SQL + ' WHERE o.id = ?', [result.lastID])
+
+    let subtasks: any[] = []
+    if (isPackageOrder) {
+      subtasks = await db.all(`
+        SELECT 
+        os.*,
+        s.name AS service_name,
+        wu.name AS worker_name
+      FROM order_subtasks os
+      LEFT JOIN services s ON os.service_id = s.id
+      LEFT JOIN workers w ON os.worker_id = w.id
+      LEFT JOIN users wu ON w.user_id = wu.id
+      WHERE os.parent_order_id = ?
+      ORDER BY os.id ASC
+    `, [result.lastID])
+    }
+
     await db.close()
 
     res.json({
       success: true,
       data: {
         ...order,
+        subtasks,
         original_price: price,
         points_deduction: pointsDeduction,
         points_used: pointsUsed,
@@ -299,6 +384,15 @@ router.put('/:id/assign', authMiddleware, requireRole('admin'), async (req: Auth
       return
     }
 
+    if (existing.is_package_order) {
+      await db.close()
+      res.status(400).json({
+        success: false,
+        error: '套餐订单请使用子任务派单接口',
+      })
+      return
+    }
+
     if (existing.status !== 'pending') {
       await db.close()
       res.status(400).json({
@@ -335,6 +429,254 @@ router.put('/:id/assign', authMiddleware, requireRole('admin'), async (req: Auth
     res.status(500).json({
       success: false,
       error: '派单失败',
+    })
+  }
+})
+
+router.put('/:id/subtasks/:subtaskId/assign', authMiddleware, requireRole('admin'), async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id, subtaskId } = req.params
+    const { worker_id } = req.body
+
+    if (!worker_id) {
+      res.status(400).json({
+        success: false,
+        error: '请指定家政人员',
+      })
+      return
+    }
+
+    const db = await getDb()
+
+    const order = await db.get('SELECT * FROM orders WHERE id = ? AND is_package_order = 1', [id])
+    if (!order) {
+      await db.close()
+      res.status(404).json({
+        success: false,
+        error: '套餐订单不存在',
+      })
+      return
+    }
+
+    const subtask = await db.get('SELECT * FROM order_subtasks WHERE id = ? AND parent_order_id = ?', [subtaskId, id])
+    if (!subtask) {
+      await db.close()
+      res.status(404).json({
+        success: false,
+        error: '子任务不存在',
+      })
+      return
+    }
+
+    if (subtask.status !== 'pending') {
+      await db.close()
+      res.status(400).json({
+        success: false,
+        error: '只有待派单状态的子任务才能派单',
+      })
+      return
+    }
+
+    const worker = await db.get('SELECT id FROM workers WHERE id = ?', [worker_id])
+    if (!worker) {
+      await db.close()
+      res.status(404).json({
+        success: false,
+        error: '家政人员不存在',
+      })
+      return
+    }
+
+    await db.run(
+      `UPDATE order_subtasks SET worker_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [worker_id, subtaskId]
+    )
+
+    const pendingSubtasks = await db.get(
+      'SELECT COUNT(*) as count FROM order_subtasks WHERE parent_order_id = ? AND status = ?',
+      [id, 'pending']
+    )
+
+    if (pendingSubtasks.count === 0) {
+      await db.run(
+        `UPDATE orders SET status = 'assigned', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [id]
+      )
+    }
+
+    const updatedOrder = await db.get(ORDER_SELECT_SQL + ' WHERE o.id = ?', [id])
+    const subtasks = await db.all(`
+      SELECT 
+        os.*,
+        s.name AS service_name,
+        wu.name AS worker_name
+      FROM order_subtasks os
+      LEFT JOIN services s ON os.service_id = s.id
+      LEFT JOIN workers w ON os.worker_id = w.id
+      LEFT JOIN users wu ON w.user_id = wu.id
+      WHERE os.parent_order_id = ?
+      ORDER BY os.id ASC
+    `, [id])
+
+    await db.close()
+
+    res.json({
+      success: true,
+      data: {
+        ...updatedOrder,
+        subtasks,
+      },
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({
+      success: false,
+      error: '子任务派单失败',
+    })
+  }
+})
+
+router.put('/:id/subtasks/:subtaskId/status', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id, subtaskId } = req.params
+    const { status } = req.body
+
+    const validStatuses = ['pending', 'assigned', 'processing', 'completed', 'cancelled']
+    if (!validStatuses.includes(status)) {
+      res.status(400).json({
+        success: false,
+        error: '无效的子任务状态',
+      })
+      return
+    }
+
+    const db = await getDb()
+
+    const order = await db.get('SELECT * FROM orders WHERE id = ? AND is_package_order = 1', [id])
+    if (!order) {
+      await db.close()
+      res.status(404).json({
+        success: false,
+        error: '套餐订单不存在',
+      })
+      return
+    }
+
+    const subtask = await db.get('SELECT * FROM order_subtasks WHERE id = ? AND parent_order_id = ?', [subtaskId, id])
+    if (!subtask) {
+      await db.close()
+      res.status(404).json({
+        success: false,
+        error: '子任务不存在',
+      })
+      return
+    }
+
+    if (req.user!.role === 'customer' && order.customer_id !== req.user!.id) {
+      await db.close()
+      res.status(403).json({
+        success: false,
+        error: '无权限修改此子任务',
+      })
+      return
+    }
+
+    if (req.user!.role === 'worker') {
+      const worker = await db.get('SELECT id FROM workers WHERE user_id = ?', [req.user!.id])
+      if (!worker || subtask.worker_id !== worker.id) {
+        await db.close()
+        res.status(403).json({
+          success: false,
+          error: '无权限修改此子任务',
+        })
+        return
+      }
+    }
+
+    await db.run(
+      `UPDATE order_subtasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [status, subtaskId]
+    )
+
+    const allSubtasks = await db.all('SELECT status FROM order_subtasks WHERE parent_order_id = ?', [id])
+    const allCompleted = allSubtasks.every((s: any) => s.status === 'completed')
+    const anyProcessing = allSubtasks.some((s: any) => s.status === 'processing')
+
+    let orderStatus = order.status
+    if (allCompleted) {
+      orderStatus = 'completed'
+    } else if (anyProcessing) {
+      orderStatus = 'processing'
+    }
+
+    if (orderStatus !== order.status) {
+      await db.run(
+        `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [orderStatus, id]
+      )
+
+      if (orderStatus === 'completed' && order.status !== 'completed') {
+        const member = await db.get('SELECT * FROM members WHERE user_id = ?', [order.customer_id])
+        if (member) {
+          const pointsEarned = calculatePointsEarned(order.price, member.level)
+          const newTotalSpent = member.total_spent + order.price
+          const newTotalOrders = member.total_orders + 1
+          const newLevelConfig = calculateMemberLevel(newTotalSpent)
+          const newPoints = member.points + pointsEarned
+
+          await db.run(
+            `UPDATE members SET 
+             points = ?, total_spent = ?, total_orders = ?, level = ?, discount = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [newPoints, newTotalSpent, newTotalOrders, newLevelConfig.level, newLevelConfig.discount, member.id]
+          )
+
+          await db.run(
+            `INSERT INTO points_records (member_id, user_id, type, points, balance, order_id, description)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [member.id, order.customer_id, 'earn', pointsEarned, newPoints, order.id, `订单完成，消费¥${order.price}，获得${pointsEarned}积分`]
+          )
+        }
+
+        if (subtask.worker_id) {
+          const expireAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          await db.run(
+            `INSERT OR IGNORE INTO follow_ups (order_id, customer_id, worker_id, status, expire_at)
+             VALUES (?, ?, ?, 'pending', ?)`,
+            [order.id, order.customer_id, subtask.worker_id, expireAt]
+          )
+        }
+      }
+    }
+
+    const updatedOrder = await db.get(ORDER_SELECT_SQL + ' WHERE o.id = ?', [id])
+    const subtasks = await db.all(`
+      SELECT 
+        os.*,
+        s.name AS service_name,
+        wu.name AS worker_name
+      FROM order_subtasks os
+      LEFT JOIN services s ON os.service_id = s.id
+      LEFT JOIN workers w ON os.worker_id = w.id
+      LEFT JOIN users wu ON w.user_id = wu.id
+      WHERE os.parent_order_id = ?
+      ORDER BY os.id ASC
+    `, [id])
+
+    await db.close()
+
+    res.json({
+      success: true,
+      data: {
+        ...updatedOrder,
+        subtasks,
+      },
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({
+      success: false,
+      error: '更新子任务状态失败',
     })
   }
 })

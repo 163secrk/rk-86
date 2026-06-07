@@ -19,6 +19,50 @@ export interface Service {
   created_at: string
 }
 
+export interface PackageService {
+  package_service_id: number
+  package_id: number
+  service_id: number
+  quantity: number
+  name: string
+  description: string
+  price: number
+  unit: string
+  duration: number
+  image: string
+}
+
+export interface Package {
+  id: number
+  name: string
+  description: string
+  price: number
+  original_price: number
+  package_price: number
+  package_original_price: number
+  original_price_calculated: number
+  savings: number
+  image: string
+  status: string
+  created_at: string
+  updated_at: string
+  services: PackageService[]
+}
+
+export interface OrderSubtask {
+  id: number
+  parent_order_id: number
+  service_id: number
+  worker_id: number | null
+  status: 'pending' | 'assigned' | 'processing' | 'completed' | 'cancelled'
+  created_at: string
+  updated_at: string
+  service_name?: string
+  service_description?: string
+  service_price?: number
+  worker_name?: string
+}
+
 export interface Worker {
   id: number
   user_id: number
@@ -38,6 +82,9 @@ export interface Order {
   order_no: string
   customer_id: number
   service_id: number
+  package_id: number | null
+  is_package_order: number
+  subtotal_price: number
   worker_id: number | null
   contact_name: string
   contact_phone: string
@@ -49,6 +96,7 @@ export interface Order {
   created_at: string
   updated_at: string
   service_name?: string
+  package_name?: string
   customer_name?: string
   worker_name?: string
   follow_up_id?: number
@@ -59,6 +107,7 @@ export interface Order {
   punctuality_rating?: number
   feedback?: string
   follow_up_completed_at?: string
+  subtasks?: OrderSubtask[]
 }
 
 export interface FollowUp {
@@ -192,6 +241,16 @@ export const serviceApi = {
   delete: (id: number) => request(`/services/${id}`, { method: 'DELETE' }),
 }
 
+export const packageApi = {
+  list: () => request<Package[]>('/packages'),
+  get: (id: number) => request<Package>(`/packages/${id}`),
+  create: (data: Partial<Package> & { services: { service_id: number; quantity: number }[] }) =>
+    request<Package>('/packages', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<Package> & { services?: { service_id: number; quantity: number }[] }) =>
+    request<Package>(`/packages/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) => request(`/packages/${id}`, { method: 'DELETE' }),
+}
+
 export const workerApi = {
   list: () => request<Worker[]>('/workers'),
   get: (id: number) => request<Worker>(`/workers/${id}`),
@@ -207,20 +266,26 @@ export const orderApi = {
     request<Order[]>(params ? `/orders?status=${params.status}` : '/orders'),
   get: (id: number) => request<Order>(`/orders/${id}`),
   create: (data: {
-    service_id: number
+    service_id?: number
+    package_id?: number
     contact_name: string
     contact_phone: string
     address: string
     appointment_time: string
     price: number
     remark?: string
+    use_points?: number
   }) => request<Order>('/orders', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<Order>) =>
     request<Order>(`/orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   assign: (id: number, worker_id: number) =>
     request<Order>(`/orders/${id}/assign`, { method: 'PUT', body: JSON.stringify({ worker_id }) }),
+  assignSubtask: (orderId: number, subtaskId: number, worker_id: number) =>
+    request<Order>(`/orders/${orderId}/subtasks/${subtaskId}/assign`, { method: 'PUT', body: JSON.stringify({ worker_id }) }),
   updateStatus: (id: number, status: Order['status']) =>
     request<Order>(`/orders/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
+  updateSubtaskStatus: (orderId: number, subtaskId: number, status: OrderSubtask['status']) =>
+    request<Order>(`/orders/${orderId}/subtasks/${subtaskId}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
 }
 
 export const reviewApi = {
